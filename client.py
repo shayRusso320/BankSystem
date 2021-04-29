@@ -6,7 +6,7 @@ SERVER_PORT = 5000
 MAX_DATA_LENGTH = 1024
 
 
-CHOOSE_OPCODE = """
+CHOOSE_FUNCTION = """
 ---------------- MENU ----------------
 
 CHOOSE THE WANTED OPERATION:
@@ -17,11 +17,14 @@ CHOOSE THE WANTED OPERATION:
 enter your choice(1-4): 
 """
 
-IDENTIFY = "please identify using your account number: "
-NAME = "please enter your name: "
-AMOUNT = "enter the amount of money for the transaction: "
+HAS_ACCOUNT = "DO YOU HAVE AN ACCOUNT?\n enter 1 for yes or 0 for no:"
+GET_INPUT = "please enter {0}: "
+OPERATION_FAILED = "OPERATION FAILED :("
+OPERATION_COMPLETED = "OPERATION WAS COMPLETED"
+DISCONNECTED = "THE ATM IS DISCONNECTED FROM BANK"
 
 
+# uploading client and connecting to server
 def upload_client():
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect((SERVER_IP, SERVER_PORT))
@@ -30,42 +33,61 @@ def upload_client():
     return client_socket
 
 
+# function for validating function number input and getting the requirements from server
+# gets: client_socket for contacting server
+# return: a dict containing the function number chosen,
+#         boolean for validating the function numebr input and the requirements for the function
+def get_function_requirements(client_socket):
+    function = int(input(CHOOSE_FUNCTION)) - 1
+
+    request = {"opcode": 0, "function": function}
+    client_socket.send(json.dumps(request).encode())
+    response = json.loads(client_socket.recv(MAX_DATA_LENGTH).decode())
+    response["function"] = function
+
+    return response
+
+
 def main():
     client_socket = upload_client()
 
     while True:
-        opcode = int(input(CHOOSE_OPCODE)) - 1
+        is_valid_function = False
+        requirements = []
+        function = -1
 
-        if opcode == 0:
-            name = input(NAME)
-            parameters = [name]
+        # asking user for a function number until user inserts a valid function number
+        while not is_valid_function:
+            response = get_function_requirements(client_socket)
+            is_valid_function = response["validation"]
+            requirements = response["requirements"]
+            function = response["function"]
 
-        elif opcode == 1:
-            account = int(input(IDENTIFY))
-            parameters = [account]
+        # asking user for the parameters required
+        parameters = []
+        for req in requirements:
+            parameters.append(input(GET_INPUT.format(req)))
 
-        elif opcode == 2 or opcode == 3:
-            account = int(input(IDENTIFY))
-            amount = int(input(AMOUNT))
-            parameters = [account, amount]
-
-        else:
-            break
-
-        request = {
-            "opcode": opcode,
+        # sending operation to server
+        operation = {
+            "opcode": 1,
+            "function": function,
             "parameters": parameters
         }
+        client_socket.send(json.dumps(operation).encode())
+        response = client_socket.recv(MAX_DATA_LENGTH)
 
-        client_socket.send(json.dumps(request).encode())
-
-        response = client_socket.recv(1024)
-
+        # handling answer from server
         if response:
-            response = response.decode()
-            print(response)
+            print("response" + str(response))
+            response = json.loads(response.decode())
+
+            print(OPERATION_COMPLETED if response["completed"] else OPERATION_FAILED)
+            print(response["content"])
+
+        # in case communication with server is shutdown
         else:
-            print("disconnected")
+            print(DISCONNECTED)
             break
 
 
