@@ -9,6 +9,15 @@ SERVER_IP = '127.0.0.1'
 PORT = 5000
 DATABASE = "data.db"
 
+INVALID_INPUT = "invalid input"
+MISSING_COMPONENTS = "not all components exist in message"
+UNMATCHING_PASSWORDS = "password doesn't match with password in DB"
+ACCOUNT_NOT_FOUND = "account is not found"
+UNMATCHING_PARAMETERS = "PARAMETERS DON'T MATCH FUNCTION"
+
+SUCCESSFUL_SIGNIN = "Signed in Successfully"
+COMPLETED_TRANSACTION = "TRANSACTION COMPLETED SUCCESSFULLY"
+
 
 class Server:
     def __init__(self):
@@ -30,7 +39,6 @@ class Server:
 
                 # if receiving a new connection
                 if sender_socket is server.serv:
-
                     (new_socket, address) = sender_socket.accept()
                     server.add_ATM(new_socket)
 
@@ -40,63 +48,123 @@ class Server:
                     data = ""
                     try:
                         data = sender_socket.recv(1024)
-
                     except ConnectionResetError or ConnectionAbortedError:
                         server.remove_ATM(sender_socket)
                         break
 
                     # extracting information
-                    request = data.decode()
-                    print("received data: " + str(request))
-
-                    request = json.loads(request)
+                    request = json.loads(data.decode())
                     opcode = request["opcode"]
-                    function = request["function"]
 
-                    # user asking for function number validation and function requirements
+                    # sign up
                     if opcode == 0:
-                        is_valid = validate_function_number(function)
-                        if is_valid:
-                            response = {"validation": True, "requirements": Server.OPERATIONS_REQUIREMENTS[function]}
-                        else:
-                            response = {"validation": False, "requirements": None}
-                        server.add_msg(sender_socket, json.dumps(response))
+                        try:
+                            password = request["password"]
+                            name = request["name"]
+                        except KeyError:
+                            server.add_msg(sender_socket, False, MISSING_COMPONENTS)
+                            continue
 
+                        # validating info
+                        try:
+                            valid_password = check_password(password)
+                            valid_name = check_name(name)
+                        except ValueError:
+                            server.add_msg(sender_socket, False, INVALID_INPUT)
+                            continue
+
+                        if valid_password and valid_name:
+                            server.open_account(sender_socket, name, password)
+                        else:
+                            server.add_msg(sender_socket, False, INVALID_INPUT)
+
+                    # sign in
                     elif opcode == 1:
-                        is_valid_function = validate_function_number(function)
-                        is_valid_parameters = validate_parameters_list(request)
+                        # extracting info
+                        try:
+                            account = request["account"]
+                            password = request["password"]
+                        except KeyError:
+                            server.add_msg(sender_socket, False, MISSING_COMPONENTS)
+                            continue
 
-                        # malicious code, trying to mimic the ATM interface
-                        if not is_valid_function or not is_valid_parameters:
-                            server.remove_ATM(sender_socket)
-                            break
+                        # validating info
+                        try:
+                            acc_valid = check_positive_integer(int(account))
+                            password_valid = check_password(password)
+                        except ValueError:
+                            server.add_msg(sender_socket, False, INVALID_INPUT)
+                            continue
 
-                        parameters = request["parameters"]
+                        if acc_valid and password_valid:
+                            # matching password inserted with the stored password
+                            try:
+                                stored_password = get_account_password(server.data, account)
+                            except TypeError:
+                                server.add_msg(sender_socket, False, ACCOUNT_NOT_FOUND)
+                                continue
 
-                        if validate_operation(function, parameters):
-                            if function != 0:
-                                acc_num = int(parameters[0])
-                                password = parameters[1]
-                                print(type(acc_num))
-                                print(type(password))
-                                print(get_account_password(server.data, acc_num))
-                                if password != get_account_password(server.data, acc_num):
-                                    response = {
-                                        "completed": False,
-                                        "content": "PASSWORD DOESN'T MATCH"
-                                    }
-                                    server.add_msg(sender_socket, json.dumps(response))
-                                    break
-
-                            # handling user's requests
-                            server.execute_operation(function, sender_socket, parameters)
-
+                            if password == stored_password:
+                                server.add_msg(sender_socket, True, SUCCESSFUL_SIGNIN)
+                            else:
+                                server.add_msg(sender_socket, False, UNMATCHING_PASSWORDS)
                         else:
-                            response = {
-                                "completed": False,
-                                "content": "PARAMETERS DON'T MATCH FUNCTION"
-                            }
-                            server.add_msg(sender_socket, json.dumps(response))
+                            server.add_msg(sender_socket, False, INVALID_INPUT)
+
+                    elif opcode == 2:
+                        # extracting info
+                        try:
+                            function = request["function"]
+                        except KeyError:
+                            server.add_msg(sender_socket, False, MISSING_COMPONENTS)
+                            continue
+
+                        # validating info
+                        is_valid = validate_function_number(int(function))
+                        if is_valid:
+                            server.add_msg(sender_socket, True, Server.OPERATIONS_REQUIREMENTS[function])
+                        else:
+                            server.add_msg(sender_socket, False, INVALID_INPUT)
+
+                    # execute operation
+                    elif opcode == 3:
+                        # extracting info
+                        try:
+                            account = request["account"]
+                            password = request["password"]
+                            function = request["function"]
+                            parameters = request["parameters"]
+                        except KeyError:
+                            server.add_msg(sender_socket, False, MISSING_COMPONENTS)
+                            continue
+
+                        # validate info
+                        try:
+                            account_valid = check_positive_integer(int(account))
+                            password_valid = check_password(password)
+                            function_valid = validate_function_number(int(function))
+                            parameters_valid = validate_operation(function, parameters)
+                        except ValueError:
+                            server.add_msg(sender_socket, False, INVALID_INPUT)
+
+                        if account_valid and password_valid and function_valid and parameters_valid:
+                            # test if malicious code trying to mimic the ATM client by sending hand-made packets
+                            try:
+                                stored_password = get_account_password(server.data, account)
+                            except TypeError:
+                                server.remove_ATM(sender_socket)
+                                continue
+                            if password != stored_password:
+                                server.remove_ATM(sender_socket)
+                                continue
+
+                            if validate_operation(function, parameters):  # handling user's requests
+                                server.execute_operation(function, sender_socket, account, parameters)
+
+                            else:
+                                server.add_msg(sender_socket, False, UNMATCHING_PARAMETERS)
+                        else:
+                            server.add_msg(sender_socket, False, INVALID_INPUT)
 
             server.send_waiting_messages(wlist)
 
@@ -110,19 +178,22 @@ class Server:
 
         return server_socket
 
-    def execute_operation(self, opcode, ATM_socket, parameters):
-        Server.OPERATIONS[opcode](self, ATM_socket, *parameters)
+    def execute_operation(self, function, ATM_socket, account, parameters):
+        return Server.OPERATIONS[function](self, ATM_socket, *([account] + parameters))
 
     def send_waiting_messages(self, wlist):
         for msg in self.messages_to_send:
 
             if msg.get_sock() in wlist:  # if the socket ready to listen
                 msg.get_sock().send(msg.get_content().encode())
-                print("sent: " + str(msg.get_content()))
                 self.messages_to_send.remove(msg)
 
-    def add_msg(self, receiver, content):
-        new_msg = Msg(receiver, content)
+    def add_msg(self, receiver, is_successful, content):
+        msg = {
+            "completed": is_successful,
+            "content": content
+        }
+        new_msg = Msg(receiver, json.dumps(msg))
         self.messages_to_send.append(new_msg)
 
     def add_ATM(self, new_socket):
@@ -138,42 +209,33 @@ class Server:
 
     def open_account(self, ATM_socket, name, password):
         account_number = add_account(self.data, password, name)
-        response = {
-            "completed": True,
-            "content": f"NEW ACCOUNT IS NOW ACTIVE, YOUR ACCOUNT NUMBER IS: {account_number}"
-        }
-        self.add_msg(ATM_socket, json.dumps(response))
+        self.add_msg(ATM_socket, True, f"NEW ACCOUNT IS NOW ACTIVE, YOUR ACCOUNT NUMBER IS: {account_number}")
 
     def check_balance(self, ATM_socket, account):
         balance = check_balance_database(self.data, account)
-        response = {
-            "completed": True,
-            "content": f"YOUR BALANCE IS: {balance}"
-        }
-        self.add_msg(ATM_socket, json.dumps(response))
+        self.add_msg(ATM_socket, True, f"YOUR BALANCE IS: {balance}")
 
     def deposit(self, ATM_socket, account, amount):
         deposit_database(self.data, account, amount)
-        response = {
-            "completed": True,
-            "content": "TRANSACTION COMPLETED SUCCESSFULLY"
-        }
-        self.add_msg(ATM_socket, json.dumps(response))
+        self.add_msg(ATM_socket, True, COMPLETED_TRANSACTION)
 
     def withdraw(self, ATM_socket, account, amount):
-        withdraw_database(self.data, account, amount)
-        response = {
-            "completed": True,
-            "content": "TRANSACTION COMPLETED SUCCESSFULLY"
-        }
-        self.add_msg(ATM_socket, json.dumps(response))
+        balance = check_balance_database(self.data, account)
 
-    OPERATIONS = [open_account, check_balance, deposit, withdraw]
+        if amount > balance:
+            self.add_msg(ATM_socket, False, "Tried withdrawing more money than balance in account")
+
+        else:
+            withdraw_database(self.data, account, amount)
+            self.add_msg(ATM_socket, True, COMPLETED_TRANSACTION)
+
+    OPERATIONS = [check_balance, deposit, withdraw]
+
+    # need to get rid of
     OPERATIONS_REQUIREMENTS = [
-        ["name", "password"],
-        ["account number", "password"],
-        ["account number", "password", "amount"],
-        ["account number", "password", "amount"]
+        [],
+        ["amount"],
+        ["amount"]
     ]
 
 
